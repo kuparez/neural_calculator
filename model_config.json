@@ -1,0 +1,25 @@
+{
+  "model":{
+    "load_path": "",
+    "save_path": "models",
+    "name": "Seq2Seq",
+    "learning_rate": 0.001,
+    "dropout_prob_enc": 0.3,
+    "n_layers_enc": 1,
+    "dropout_prob_dec": 0.3,
+    "n_layers_dec": 1,
+    "embedding_dim": 10,
+    "hidden_dim": 10,
+    "n_epochs": 10,
+    "teacher_forcing_ratio": 0.5,
+    "gradient_clip": 0.3,
+    "optimizer":{
+      "name": "",
+      "learning_rate": ""
+    },
+    "criterion":{
+      "name": ""
+    }
+  },
+  "save_path": ""
+}
