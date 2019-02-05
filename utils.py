@@ -1,4 +1,5 @@
 import random
+import torch
 
 
 def generate_equations(allowed_operators, dataset_size, min_value, max_value):
@@ -73,6 +74,17 @@ def batch_to_ids(sentences, word2id, max_len, end_symbol, padding_symbol):
         batch_ids.append(ids)
         batch_ids_len.append(ids_len)
     return batch_ids, batch_ids_len
+
+
+def batch_to_tensor(batch, sentence_start_token_idx):
+    batch_size = len(batch)
+
+    sos_tensor = torch.LongTensor([[sentence_start_token_idx]] * batch_size)
+    batch_tensor = torch.LongTensor(batch)
+
+    output = torch.cat((sos_tensor, batch_tensor), dim=1)
+
+    return output
 
 
 def generate_batches(samples, batch_size=64):
