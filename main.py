@@ -3,21 +3,19 @@ import json
 import math
 import os
 
-import torch
-from torch import nn
-from torch import optim
+from tqdm import tqdm
 
 from utils import *
 from model import *
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--batch_size', type=int, default=128)
-parser.add_argument('--train_samples', type=int, default=10000)
+parser.add_argument('--batch_size', type=int, default=256)
+parser.add_argument('--train_samples', type=int, default=100000)
 parser.add_argument('--valid_samples', type=int, default=1000)
 parser.add_argument('--test_samples', type=int, default=1000)
 parser.add_argument('--allowed_operations', type=str, default='+-')
 parser.add_argument('--min_value', type=int, default=0)
-parser.add_argument('--max_value', type=int, default=999999)
+parser.add_argument('--max_value', type=int, default=9999)
 parser.add_argument('--model_config', type=str, default='model_config.json')
 
 args = parser.parse_args()
@@ -67,11 +65,20 @@ with open(MODEL_CONFIG_PATH, 'r') as f:
     learning_rate = model_params['model']['optimizer']['learning_rate']
 
 
-embedding = nn.Embedding(len(word2id), embedding_dim, padding_idx=word2id[PADDING_SYMBOL])
+embedding = nn.Embedding(len(word2id), embedding_dim)
 
-encoder = Encoder(embedding, hidden_size, dropout_prob_enc, n_layers_enc)
-decoder = Decoder(embedding, len(word2id), hidden_size, dropout_prob_dec, n_layers_dec)
+if model_name == 'Seq2Seq':
+    encoder = Encoder(embedding, hidden_size, dropout_prob_enc, n_layers_enc)
+    decoder = Decoder(embedding, len(word2id), hidden_size, dropout_prob_dec, n_layers_dec)
+elif model_name == 'LSTMSeq2Seq':
+    encoder = LSTMEncoder(embedding, hidden_size, dropout_prob_enc, n_layers_enc)
+    decoder = LSTMDecoder(embedding, len(word2id), hidden_size, dropout_prob_dec, n_layers_dec)
+else:
+    raise NotImplementedError(f'Model {model_name} not implemented')
+
 model = Seq2Seq(encoder, decoder, DEVICE).to(DEVICE)
+
+print(f'Training {model_name}')
 
 criterion = nn.CrossEntropyLoss(ignore_index=word2id[PADDING_SYMBOL])
 optimizer = optim.Adam(model.parameters(), learning_rate)
@@ -83,28 +90,34 @@ def train(model: Seq2Seq, train_data, optimizer, criterion, clip):
     epoch_loss = 0
     i = 1
 
-    for i, (x_batch, y_batch) in enumerate(generate_batches(train_data, BATCH_SIZE)):
+    with tqdm(bar_format='{postfix[0]} {postfix[3][iter]}/{postfix[2]} {postfix[1]}: {postfix[1][loss]}',
+              postfix=['Training iter:', 'Loss', f'{len(train_data)//BATCH_SIZE}', dict(loss=0, iter=0)]) as t:
+        for i, (x_batch, y_batch) in enumerate(generate_batches(train_data, BATCH_SIZE)):
 
-        x_batch_prep, x_len = batch_to_ids(x_batch, word2id, MAX_LEN, END_SYMBOL, PADDING_SYMBOL)
-        y_batch_prep, y_len = batch_to_ids(y_batch, word2id, MAX_LEN, END_SYMBOL, PADDING_SYMBOL)
+            x_batch_prep, x_len = batch_to_ids(x_batch, word2id, MAX_LEN, END_SYMBOL, PADDING_SYMBOL)
+            y_batch_prep, y_len = batch_to_ids(y_batch, word2id, MAX_LEN, END_SYMBOL, PADDING_SYMBOL)
 
-        x_train = batch_to_tensor(x_batch_prep, word2id[START_SYMBOL])
-        x_train = x_train.view(x_train.shape[1], x_train.shape[0])
-        y_train = batch_to_tensor(y_batch_prep, word2id[START_SYMBOL])
-        y_train = y_train.view(y_train.shape[1], y_train.shape[0])
+            x_train = batch_to_tensor(x_batch_prep, word2id[START_SYMBOL])
+            x_train = x_train.view(x_train.shape[1], x_train.shape[0])
+            y_train = batch_to_tensor(y_batch_prep, word2id[START_SYMBOL])
+            y_train = y_train.view(y_train.shape[1], y_train.shape[0])
 
-        output = model.forward(x_train, y_train, teacher_forcing_ratio)
+            output = model.forward(x_train, y_train, teacher_forcing_ratio)
 
 
-        y_true = y_train.view(-1)
-        loss = criterion(output.view(-1, output.shape[2]), y_true)
-        loss.backward()
+            y_true = y_train[1:].view(-1)
+            loss = criterion(output[1:].view(-1, output.shape[2]), y_true)
+            loss.backward()
 
-        torch.nn.utils.clip_grad_norm_(model.parameters(), clip)
+            torch.nn.utils.clip_grad_norm_(model.parameters(), clip)
 
-        optimizer.step()
+            optimizer.step()
 
-        epoch_loss += loss.item()
+            epoch_loss += loss.item()
+
+            t.postfix[3]['loss'] = loss.item()
+            t.postfix[3]['iter'] = i
+            t.update()
 
     return epoch_loss / i
 
@@ -116,7 +129,8 @@ def evaluate(model: Seq2Seq, validation_data, criterion):
 
     with torch.no_grad():
 
-        for i, (x_val, y_val) in enumerate(generate_batches(validation_data, BATCH_SIZE)):
+        for i, (x_val, y_val) in tqdm(enumerate(generate_batches(validation_data, BATCH_SIZE)),
+                                      total=len(validation_data) // BATCH_SIZE, desc='Validating'):
             x_val_prep, x_len = batch_to_ids(x_val, word2id, MAX_LEN, END_SYMBOL, PADDING_SYMBOL)
             y_val_prep, y_len = batch_to_ids(y_val, word2id, MAX_LEN, END_SYMBOL, PADDING_SYMBOL)
 
@@ -125,11 +139,11 @@ def evaluate(model: Seq2Seq, validation_data, criterion):
             y_val = batch_to_tensor(y_val_prep, word2id[START_SYMBOL])
             y_val = y_val.view(y_val.shape[1], y_val.shape[0])
 
-            y_true = y_val.view(-1)
+            y_true = y_val[1:].view(-1)
 
             output = model.forward(x_val, y_val, 0)
 
-            loss = criterion(output.view(-1, output.shape[2]), y_true)
+            loss = criterion(output[1:].view(-1, output.shape[2]), y_true)
 
             epoch_loss += loss.item()
 

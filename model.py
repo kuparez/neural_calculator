@@ -17,9 +17,9 @@ class Encoder(nn.Module):
         self.hidden_size = hidden_size
         self.n_layers = n_layers
 
-        input_size = embedding.weight.size()[1]
+        self.emb_dim = embedding.weight.size()[1]
         self.embed_dropout = nn.Dropout(p=dropout_prob)
-        self.encoder = nn.GRU(input_size, hidden_size, num_layers=n_layers, dropout=dropout_prob)
+        self.encoder = nn.GRU(self.emb_dim, hidden_size, num_layers=n_layers, dropout=dropout_prob)
 
     def forward(self, input):
         embedded = self.embed_dropout(self.embedding(input))
@@ -27,6 +27,21 @@ class Encoder(nn.Module):
         out, hidden = self.encoder(embedded)
 
         return out, hidden
+
+
+class LSTMEncoder(Encoder):
+
+    def __init__(self, embedding: nn.Embedding, hidden_size=128, dropout_prob=0.5, n_layers=1):
+        super().__init__(embedding, hidden_size, dropout_prob, n_layers)
+
+        self.encoder = nn.LSTM(self.emb_dim, hidden_size, n_layers, dropout=dropout_prob)
+
+    def forward(self, input):
+        embedded = self.embed_dropout(self.embedding(input))
+
+        _, (hidden, cell) = self.encoder(embedded)
+
+        return _, (hidden, cell)
 
 
 class Decoder(nn.Module):
@@ -40,8 +55,8 @@ class Decoder(nn.Module):
         self.n_layers = n_layers
         self.vocabulary_size = vocabulary_size
 
-        input_size = embedding.weight.size()[1]
-        self.decoder = nn.GRU(input_size, hidden_size, n_layers, dropout=dropout_prob)
+        self.emb_dim = embedding.weight.size()[1]
+        self.decoder = nn.GRU(self.emb_dim, hidden_size, n_layers, dropout=dropout_prob)
 
         self.out = nn.Linear(hidden_size, vocabulary_size)
 
@@ -53,6 +68,23 @@ class Decoder(nn.Module):
         pred = self.out(o.squeeze(0))
 
         return pred, hidden
+
+
+class LSTMDecoder(Decoder):
+    def __init__(self, embedding: nn.Embedding, vocabulary_size: int,
+                 hidden_size=128, dropout_prob=0.5, n_layers=1):
+        super().__init__(embedding, vocabulary_size, hidden_size, dropout_prob, n_layers)
+
+        self.decoder = nn.LSTM(self.emb_dim, hidden_size, n_layers, dropout=dropout_prob)
+
+    def forward(self, input, hidden):
+        embedded = self.embedding(input.unsqueeze(0))
+
+        o, (hidden, cell) = self.decoder(embedded, hidden)
+
+        pred = self.out(o.squeeze(0))
+
+        return pred, (hidden, cell)
 
 
 class Seq2Seq(nn.Module):
@@ -73,8 +105,6 @@ class Seq2Seq(nn.Module):
         out_size = self.decoder.vocabulary_size
 
         outputs = torch.zeros(max_len, batch_size, out_size).to(self.device)
-
-
 
         # Start tokens
         inp = ground_truth[0, :]
