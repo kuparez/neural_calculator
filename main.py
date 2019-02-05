@@ -12,9 +12,9 @@ from model import *
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--batch_size', type=int, default=128)
-parser.add_argument('--train_samples', type=int, default=100000)
-parser.add_argument('--valid_samples', type=int, default=10000)
-parser.add_argument('--test_samples', type=int, default=10000)
+parser.add_argument('--train_samples', type=int, default=10000)
+parser.add_argument('--valid_samples', type=int, default=1000)
+parser.add_argument('--test_samples', type=int, default=1000)
 parser.add_argument('--allowed_operations', type=str, default='+-')
 parser.add_argument('--min_value', type=int, default=0)
 parser.add_argument('--max_value', type=int, default=999999)
@@ -43,7 +43,7 @@ START_SYMBOL = '^'
 PADDING_SYMBOL = '#'
 END_SYMBOL = '$'
 
-print(f'In test set: {len(TRAIN_DATA)}, In validation set {len(VALIDATION_DATA)}, In test set {len(TEST_DATA)}')
+print(f'In train set: {len(TRAIN_DATA)}, In validation set {len(VALIDATION_DATA)}, In test set {len(TEST_DATA)}')
 
 DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 print(f'Using {DEVICE}')
@@ -51,8 +51,8 @@ print(f'Using {DEVICE}')
 
 with open(MODEL_CONFIG_PATH, 'r') as f:
     model_params = json.load(f)
+    # Model params
     model_name = model_params['model']['name']
-    learning_rate = model_params['model']['learning_rate']
     dropout_prob_enc= model_params['model']['dropout_prob_enc']
     n_layers_enc = model_params['model']['n_layers_enc']
     dropout_prob_dec = model_params['model']['dropout_prob_dec']
@@ -63,6 +63,8 @@ with open(MODEL_CONFIG_PATH, 'r') as f:
     teacher_forcing_ratio = model_params['model']['teacher_forcing_ratio']
     clip_grad = model_params['model']['gradient_clip']
     model_save_path = model_params['model']['save_path']
+    # Optimizer
+    learning_rate = model_params['model']['optimizer']['learning_rate']
 
 
 embedding = nn.Embedding(len(word2id), embedding_dim, padding_idx=word2id[PADDING_SYMBOL])
@@ -86,10 +88,15 @@ def train(model: Seq2Seq, train_data, optimizer, criterion, clip):
         x_batch_prep, x_len = batch_to_ids(x_batch, word2id, MAX_LEN, END_SYMBOL, PADDING_SYMBOL)
         y_batch_prep, y_len = batch_to_ids(y_batch, word2id, MAX_LEN, END_SYMBOL, PADDING_SYMBOL)
 
-        output = model.forward(x_batch_prep, y_batch_prep, word2id[START_SYMBOL], teacher_forcing_ratio)
+        x_train = batch_to_tensor(x_batch_prep, word2id[START_SYMBOL])
+        x_train = x_train.view(x_train.shape[1], x_train.shape[0])
+        y_train = batch_to_tensor(y_batch_prep, word2id[START_SYMBOL])
+        y_train = y_train.view(y_train.shape[1], y_train.shape[0])
+
+        output = model.forward(x_train, y_train, teacher_forcing_ratio)
 
 
-        y_true = torch.LongTensor(y_batch_prep).view(-1)
+        y_true = y_train.view(-1)
         loss = criterion(output.view(-1, output.shape[2]), y_true)
         loss.backward()
 
@@ -113,9 +120,14 @@ def evaluate(model: Seq2Seq, validation_data, criterion):
             x_val_prep, x_len = batch_to_ids(x_val, word2id, MAX_LEN, END_SYMBOL, PADDING_SYMBOL)
             y_val_prep, y_len = batch_to_ids(y_val, word2id, MAX_LEN, END_SYMBOL, PADDING_SYMBOL)
 
-            y_true = torch.LongTensor(y_val_prep).view(-1)
+            x_val = batch_to_tensor(x_val_prep, word2id[START_SYMBOL])
+            x_val = x_val.view(x_val.shape[1], x_val.shape[0])
+            y_val = batch_to_tensor(y_val_prep, word2id[START_SYMBOL])
+            y_val = y_val.view(y_val.shape[1], y_val.shape[0])
 
-            output = model.forward(x_val_prep, y_val_prep, word2id[START_SYMBOL], 0)
+            y_true = y_val.view(-1)
+
+            output = model.forward(x_val, y_val, 0)
 
             loss = criterion(output.view(-1, output.shape[2]), y_true)
 
@@ -124,8 +136,33 @@ def evaluate(model: Seq2Seq, validation_data, criterion):
     return epoch_loss / i
 
 
-N_EPOCHS = 10
-CLIP = 10
+def predict(model: Seq2Seq, X, max_len):
+
+    model.eval()
+    x, x_len = batch_to_ids(X, word2id, MAX_LEN, END_SYMBOL, PADDING_SYMBOL)
+
+    with torch.no_grad():
+        x = batch_to_tensor(x, word2id[START_SYMBOL])
+        x = x.view(x.shape[1], x.shape[0])
+        _, hidden = model.encoder(x)
+        inp = x[0, :]
+
+        symbol = ''
+        output = []
+
+        while symbol != END_SYMBOL and len(output) < max_len:
+
+            out, hidden = model.decoder(inp, hidden)
+
+            idx = out.max(1)[1]
+            symbol = id2word[idx.item()]
+
+            output.append(symbol)
+            inp = idx
+
+    return ''.join(output)
+
+
 MODEL_SAVE_PATH = os.path.join(model_save_path, 'model1.pt')
 
 best_valid_loss = float('inf')
@@ -133,10 +170,14 @@ best_valid_loss = float('inf')
 if not os.path.isdir(f'{model_save_path}'):
     os.makedirs(f'{model_save_path}')
 
-for epoch in range(N_EPOCHS):
+for epoch in range(n_epochs):
 
-    train_loss = train(model, TRAIN_DATA, optimizer, criterion, CLIP)
+    train_loss = train(model, TRAIN_DATA, optimizer, criterion, clip_grad)
     valid_loss = evaluate(model, VALIDATION_DATA, criterion)
+
+    random_example = [random.choice(VALIDATION_DATA)[0]]
+    res = predict(model, random_example, MAX_LEN)
+    print(random_example, res)
 
     if valid_loss < best_valid_loss:
         best_valid_loss = valid_loss

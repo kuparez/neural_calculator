@@ -18,10 +18,11 @@ class Encoder(nn.Module):
         self.n_layers = n_layers
 
         input_size = embedding.weight.size()[1]
+        self.embed_dropout = nn.Dropout(p=dropout_prob)
         self.encoder = nn.GRU(input_size, hidden_size, num_layers=n_layers, dropout=dropout_prob)
 
     def forward(self, input):
-        embedded = self.embedding(input.view(input.shape[1], input.shape[0]))
+        embedded = self.embed_dropout(self.embedding(input))
 
         out, hidden = self.encoder(embedded)
 
@@ -66,35 +67,26 @@ class Seq2Seq(nn.Module):
         assert self.encoder.hidden_size == self.decoder.hidden_size
         assert self.encoder.n_layers == self.decoder.n_layers
 
-    def forward(self, input_batch: List[List[int]], ground_truth: List[List[int]], sos_idx: int,
-                teacher_forcing_ratio=0.5):
-        batch_size = len(input_batch)
-        max_len = max(len(ib) for ib in ground_truth)
+    def forward(self, input_batch: torch.LongTensor, ground_truth: torch.LongTensor, teacher_forcing_ratio=0.5):
+        batch_size = input_batch.shape[1]
+        max_len = ground_truth.shape[0]
         out_size = self.decoder.vocabulary_size
 
         outputs = torch.zeros(max_len, batch_size, out_size).to(self.device)
 
-        sos_tensor = torch.LongTensor([[sos_idx]]*batch_size)
-        batch_tensor = torch.LongTensor(input_batch)
-        gt_tensor = torch.LongTensor(ground_truth)
 
-        assert sos_tensor.shape[0] == batch_tensor.shape[0]
-        assert sos_tensor.shape[0] == batch_tensor.shape[0]
-
-        input = torch.cat((sos_tensor, batch_tensor), dim=1)
-        gt = torch.cat((sos_tensor, gt_tensor), dim=1)
 
         # Start tokens
-        inp = gt[:, 0]
+        inp = ground_truth[0, :]
 
-        _, hidden = self.encoder(input)
+        _, hidden = self.encoder(input_batch)
 
         for i in range(1, max_len):
             output, hidden = self.decoder(inp, hidden)
             outputs[i] = output
             teacher_force = random.random() < teacher_forcing_ratio
             top1 = output.max(1)[1]
-            inp = gt[:, i] if teacher_force else top1
+            inp = ground_truth[i, :] if teacher_force else top1
 
 
         return outputs
