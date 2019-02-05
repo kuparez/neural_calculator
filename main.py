@@ -4,6 +4,7 @@ import math
 import os
 
 from tqdm import tqdm
+from torchtext.data import BucketIterator
 
 from utils import *
 from model import *
@@ -30,28 +31,45 @@ MAX_VALUE = args.max_value
 MODEL_CONFIG_PATH = args.model_config
 MAX_LEN = 20
 
-TRAIN_DATA = generate_equations(ALLOWED_OPERATIONS, TRAIN_SAMPLES, MIN_VALUE, MAX_VALUE)
-TEST_DATA = generate_equations(ALLOWED_OPERATIONS, TEST_SAMPLES, MIN_VALUE, MAX_VALUE)
-VALIDATION_DATA = generate_equations(ALLOWED_OPERATIONS, VALIDATION_SAMPLES, MIN_VALUE, MAX_VALUE)
-
-word2id = {symbol:i for i, symbol in enumerate('#^$+-1234567890')}
-id2word = {i:symbol for symbol, i in word2id.items()}
+word2id = {symbol: i for i, symbol in enumerate('?#^$+-1234567890')}
+id2word = {i: symbol for symbol, i in word2id.items()}
 
 START_SYMBOL = '^'
 PADDING_SYMBOL = '#'
 END_SYMBOL = '$'
+UNK_SYMBOL = '?'
 
-print(f'In train set: {len(TRAIN_DATA)}, In validation set {len(VALIDATION_DATA)}, In test set {len(TEST_DATA)}')
+x = Field(eos_token=END_SYMBOL, pad_token=PADDING_SYMBOL, init_token=START_SYMBOL, tokenize=lambda x: [xi for xi in x],
+          unk_token=UNK_SYMBOL)
+y = Field(eos_token=END_SYMBOL, pad_token=PADDING_SYMBOL, init_token=START_SYMBOL, tokenize=lambda x: [xi for xi in x],
+          is_target=True, unk_token=UNK_SYMBOL)
+
+TRAIN_DATASET, VALIDATION_DATASET, TEST_DATASET = generate_equation_for_torch(ALLOWED_OPERATIONS, MIN_VALUE, MAX_VALUE,
+                                                                              TRAIN_SAMPLES, VALIDATION_SAMPLES,
+                                                                              TEST_SAMPLES, x, y)
+
+TRAIN_DATA, VALIDATION_DATA, TEST_DATA = BucketIterator.splits((TRAIN_DATASET, VALIDATION_DATASET, TEST_SAMPLES),
+                                                               batch_sizes=[BATCH_SIZE, BATCH_SIZE, BATCH_SIZE],
+                                                               sort_key = lambda x: len(x.x))
+
+x.build_vocab(TRAIN_DATASET)
+y.build_vocab(TRAIN_DATASET)
+
+print(f'In train set: {len(TRAIN_DATASET)}, In validation set {len(VALIDATION_DATASET)}, '
+      f'In test set {len(TEST_DATASET)}')
+
+for i in TRAIN_DATA:
+    print(i)
+    break
 
 DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 print(f'Using {DEVICE}')
-
 
 with open(MODEL_CONFIG_PATH, 'r') as f:
     model_params = json.load(f)
     # Model params
     model_name = model_params['model']['name']
-    dropout_prob_enc= model_params['model']['dropout_prob_enc']
+    dropout_prob_enc = model_params['model']['dropout_prob_enc']
     n_layers_enc = model_params['model']['n_layers_enc']
     dropout_prob_dec = model_params['model']['dropout_prob_dec']
     n_layers_dec = model_params['model']['n_layers_dec']
@@ -63,7 +81,6 @@ with open(MODEL_CONFIG_PATH, 'r') as f:
     model_save_path = model_params['model']['save_path']
     # Optimizer
     learning_rate = model_params['model']['optimizer']['learning_rate']
-
 
 embedding = nn.Embedding(len(word2id), embedding_dim)
 
@@ -91,19 +108,11 @@ def train(model: Seq2Seq, train_data, optimizer, criterion, clip):
     i = 1
 
     with tqdm(bar_format='{postfix[0]} {postfix[3][iter]}/{postfix[2]} {postfix[1]}: {postfix[1][loss]}',
-              postfix=['Training iter:', 'Loss', f'{len(train_data)//BATCH_SIZE}', dict(loss=0, iter=0)]) as t:
-        for i, (x_batch, y_batch) in enumerate(generate_batches(train_data, BATCH_SIZE)):
-
-            x_batch_prep, x_len = batch_to_ids(x_batch, word2id, MAX_LEN, END_SYMBOL, PADDING_SYMBOL)
-            y_batch_prep, y_len = batch_to_ids(y_batch, word2id, MAX_LEN, END_SYMBOL, PADDING_SYMBOL)
-
-            x_train = batch_to_tensor(x_batch_prep, word2id[START_SYMBOL])
-            x_train = x_train.view(x_train.shape[1], x_train.shape[0])
-            y_train = batch_to_tensor(y_batch_prep, word2id[START_SYMBOL])
-            y_train = y_train.view(y_train.shape[1], y_train.shape[0])
+              postfix=['Training iter:', 'Loss', f'{TRAIN_SAMPLES//BATCH_SIZE}', dict(loss=0, iter=0)]) as t:
+        for i, (x_train, y_train) in enumerate(train_data):
+            optimizer.zero_grad()
 
             output = model.forward(x_train, y_train, teacher_forcing_ratio)
-
 
             y_true = y_train[1:].view(-1)
             loss = criterion(output[1:].view(-1, output.shape[2]), y_true)
@@ -121,6 +130,7 @@ def train(model: Seq2Seq, train_data, optimizer, criterion, clip):
 
     return epoch_loss / i
 
+
 def evaluate(model: Seq2Seq, validation_data, criterion):
     model.eval()
 
@@ -128,16 +138,8 @@ def evaluate(model: Seq2Seq, validation_data, criterion):
     i = 1
 
     with torch.no_grad():
-
         for i, (x_val, y_val) in tqdm(enumerate(generate_batches(validation_data, BATCH_SIZE)),
-                                      total=len(validation_data) // BATCH_SIZE, desc='Validating'):
-            x_val_prep, x_len = batch_to_ids(x_val, word2id, MAX_LEN, END_SYMBOL, PADDING_SYMBOL)
-            y_val_prep, y_len = batch_to_ids(y_val, word2id, MAX_LEN, END_SYMBOL, PADDING_SYMBOL)
-
-            x_val = batch_to_tensor(x_val_prep, word2id[START_SYMBOL])
-            x_val = x_val.view(x_val.shape[1], x_val.shape[0])
-            y_val = batch_to_tensor(y_val_prep, word2id[START_SYMBOL])
-            y_val = y_val.view(y_val.shape[1], y_val.shape[0])
+                                      total=VALIDATION_SAMPLES // BATCH_SIZE, desc='Validating'):
 
             y_true = y_val[1:].view(-1)
 
@@ -150,14 +152,10 @@ def evaluate(model: Seq2Seq, validation_data, criterion):
     return epoch_loss / i
 
 
-def predict(model: Seq2Seq, X, max_len):
-
+def predict(model: Seq2Seq, x, max_len):
     model.eval()
-    x, x_len = batch_to_ids(X, word2id, MAX_LEN, END_SYMBOL, PADDING_SYMBOL)
 
     with torch.no_grad():
-        x = batch_to_tensor(x, word2id[START_SYMBOL])
-        x = x.view(x.shape[1], x.shape[0])
         _, hidden = model.encoder(x)
         inp = x[0, :]
 
@@ -165,7 +163,6 @@ def predict(model: Seq2Seq, X, max_len):
         output = []
 
         while symbol != END_SYMBOL and len(output) < max_len:
-
             out, hidden = model.decoder(inp, hidden)
 
             idx = out.max(1)[1]

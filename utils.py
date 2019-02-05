@@ -1,5 +1,10 @@
 import random
+from typing import Iterable
+import csv
+import os
+
 import torch
+from torchtext.data import TabularDataset, Field
 
 
 def generate_equations(allowed_operators, dataset_size, min_value, max_value):
@@ -23,6 +28,35 @@ def generate_equations(allowed_operators, dataset_size, min_value, max_value):
         res = eval(eq)
         sample.append((eq, str(res)))
     return sample
+
+
+def generate_equation_for_torch(allowed_operators: Iterable, min_value: int, max_value: int,
+                                train_size: int, validation_size: int, test_size: int,
+                                x: Field, y: Field):
+    train_samples = generate_equations(allowed_operators, train_size, min_value, max_value)
+    test_samples = generate_equations(allowed_operators, test_size, min_value, max_value)
+    validation_samples = generate_equations(allowed_operators, validation_size, min_value, max_value)
+    with open('tmp_train.csv', 'w') as f:
+        writer = csv.writer(f)
+        writer.writerow(['x', 'y'])
+        writer.writerows(train_samples)
+    with open('tmp_validation.csv', 'w') as f:
+        writer = csv.writer(f)
+        writer.writerow(['x', 'y'])
+        writer.writerows(validation_samples)
+    with open('tmp_test.csv', 'w') as f:
+        writer = csv.writer(f)
+        writer.writerow(['x', 'y'])
+        writer.writerows(test_samples)
+
+    train, validation, test = TabularDataset.splits(path='', train='tmp_train.csv', validation='tmp_validation.csv',
+                                                    test='tmp_test.csv', fields=[('x', x), ('y', y)], format='csv',
+                                                    skip_header=True)
+    os.remove('tmp_train.csv')
+    os.remove('tmp_validation.csv')
+    os.remove('tmp_test.csv')
+
+    return train, validation, test
 
 
 def sentence_to_ids(sentence, word2id, padded_len, end_symbol, padding_symbol):
