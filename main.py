@@ -48,7 +48,7 @@ TRAIN_DATASET, VALIDATION_DATASET, TEST_DATASET = generate_equation_for_torch(AL
                                                                               TRAIN_SAMPLES, VALIDATION_SAMPLES,
                                                                               TEST_SAMPLES, x, y)
 
-TRAIN_DATA, VALIDATION_DATA, TEST_DATA = BucketIterator.splits((TRAIN_DATASET, VALIDATION_DATASET, TEST_SAMPLES),
+TRAIN_DATA, VALIDATION_DATA, TEST_DATA = BucketIterator.splits((TRAIN_DATASET, VALIDATION_DATASET, TEST_DATASET),
                                                                batch_sizes=[BATCH_SIZE, BATCH_SIZE, BATCH_SIZE],
                                                                sort_key = lambda x: len(x.x))
 
@@ -58,12 +58,10 @@ y.build_vocab(TRAIN_DATASET)
 print(f'In train set: {len(TRAIN_DATASET)}, In validation set {len(VALIDATION_DATASET)}, '
       f'In test set {len(TEST_DATASET)}')
 
-for i in TRAIN_DATA:
-    print(i)
-    break
 
 DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 print(f'Using {DEVICE}')
+
 
 with open(MODEL_CONFIG_PATH, 'r') as f:
     model_params = json.load(f)
@@ -138,7 +136,7 @@ def evaluate(model: Seq2Seq, validation_data, criterion):
     i = 1
 
     with torch.no_grad():
-        for i, (x_val, y_val) in tqdm(enumerate(generate_batches(validation_data, BATCH_SIZE)),
+        for i, (x_val, y_val) in tqdm(enumerate(validation_data),
                                       total=VALIDATION_SAMPLES // BATCH_SIZE, desc='Validating'):
 
             y_true = y_val[1:].view(-1)
@@ -186,9 +184,12 @@ for epoch in range(n_epochs):
     train_loss = train(model, TRAIN_DATA, optimizer, criterion, clip_grad)
     valid_loss = evaluate(model, VALIDATION_DATA, criterion)
 
-    random_example = [random.choice(VALIDATION_DATA)[0]]
-    res = predict(model, random_example, MAX_LEN)
-    print(random_example, res)
+    # for t in TEST_DATA:
+    #     ex = t.x[:, 0].unsqueeze(0)
+    #     break
+    #
+    # res = predict(model, ex, MAX_LEN)
+    # print(''.join([id2word[idx] for idx in ex.detach().numpy()]), res)
 
     if valid_loss < best_valid_loss:
         best_valid_loss = valid_loss
