@@ -110,6 +110,8 @@ def train(model: Seq2Seq, train_data, optimizer, criterion, clip):
         for i, (x_train, y_train) in enumerate(train_data):
             optimizer.zero_grad()
 
+            x_train, y_train = x_train.to(DEVICE), y_train.to(DEVICE)
+
             output = model.forward(x_train, y_train, teacher_forcing_ratio)
 
             y_true = y_train[1:].view(-1)
@@ -138,6 +140,8 @@ def evaluate(model: Seq2Seq, validation_data, criterion):
     with torch.no_grad():
         for i, (x_val, y_val) in tqdm(enumerate(validation_data),
                                       total=VALIDATION_SAMPLES // BATCH_SIZE, desc='Validating'):
+
+            y_val, y_val = y_val.to(DEVICE), y_val.to(DEVICE)
 
             y_true = y_val[1:].view(-1)
 
