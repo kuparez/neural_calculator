@@ -19,7 +19,7 @@ numpy==1.16.1
 parso==0.3.2
 pexpect==4.6.0
 pickleshare==0.7.5
-Pillow==5.4.1
+Pillow==6.2.0
 plac==0.9.6
 preshed==2.0.1
 progressbar==2.5
